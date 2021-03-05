@@ -3,7 +3,7 @@ This code produces Prophet models for each stock item in the test set, makes pre
 It also makes predictions for the test period.
 '''
 
-# import libararies
+# import libraries
 import pandas as pd
 import numpy as np
 from sklearn.metrics import mean_absolute_error
@@ -45,7 +45,7 @@ END of chunk
 '''
 
 # function for data preprocessing
-def get_ts (stock_code):
+def prep_data (stock_code):
     
     # read previously saved labeled data for an individual stock code
     path = './files/' +str(stock_code)+'.csv'   
@@ -58,7 +58,7 @@ def get_ts (stock_code):
     # create a time series dataframe for the stock code
     df_ = pd.DataFrame(index=pd.date_range('2015-06-01', periods=488, freq='D'))
 
-    # mark duplcates to eliminate in both sets
+    # mark duplicates to eliminate in both sets
     df.loc[:,'delete']=0
     df_t.loc[:,'delete']=0
     
@@ -104,17 +104,19 @@ def get_ts (stock_code):
     # add labeled time series to its dataframe, fill in the gaps with zeroes
     ts = pd.concat([df_,df], axis=1)
     ts = ts.fillna(value=0)
-    
-    return (ts, df_t)
 
-def modeling_prophet(ts, scale=0.05):
     # add columns required by Prophet
     ts['ds']=ts.index
     ts['y']=ts.loc[:,'unidades_vendidas']
     
+    return (ts, df_t)
+
+def modeling_prophet(ts, scale=0.05):
+    
+    
     # divide data in train and validation sets
     train = ts.iloc[:-90,:]
-    test = ts.iloc[-90:,:]
+    valid = ts.iloc[-90:,:]
 
     # make and fit a model with three additional regressors
     m = Prophet(changepoint_prior_scale=scale)
@@ -123,26 +125,28 @@ def modeling_prophet(ts, scale=0.05):
     m.add_regressor('visitas')
     m.fit(train)
 
-    # make predictions for validation period
-    future = m.make_future_dataframe(periods=len(test), freq='D')
+    # make predictions
+    future = m.make_future_dataframe(periods=len(valid), freq='D')
     future.loc[:,'campaña']=ts.loc[:,'campaña'].to_list()
     future.loc[:,'dia_atipico']=ts.loc[:,'dia_atipico'].to_list()
     future.loc[:,'visitas']=ts.loc[:,'visitas'].to_list()
     forecast = m.predict(future)
        
-    # extract predictions for validation period
-    predictions = forecast.iloc[-len(test):]['yhat'].astype(int)
+     # extract predictions for validation period
+    predictions = forecast.iloc[-len(valid):][['ds','yhat']]
+    predictions['yhat']=predictions['yhat'].astype(int)
     
-    # eliminate negative values from predictions
-    for i in range(predictions.index.start, predictions.index.stop):
-        if predictions.loc[i] < 0:
-            predictions.loc[i] = 0
+    
+    # change negative values to zeros
+    for i in range(len(predictions)):
+        if predictions.iloc[i,1] < 0:
+            predictions.iloc[i,1] = 0
     
     # calculate prediction error
-    mae = mean_absolute_error(test['unidades_vendidas'], predictions)
+    mae = mean_absolute_error(valid['unidades_vendidas'], predictions['yhat'])
     
     # calculate the proportion MAE/STD
-    coef = mae / (test['unidades_vendidas'].std()+0.001)
+    coef = mae / (valid['unidades_vendidas'].std()+0.001)
     
     return (mae, coef)
     
@@ -171,7 +175,7 @@ def forecast_prophet(stock_code,ts, df_t, scale=0.05):
     # extract predictions for test period
     predictions = forecast.iloc[-len(df_t):][['ds','yhat']]
     predictions['yhat']=predictions['yhat'].astype(int)
-    predictions.index = predictions['ds']    
+    
     
     # change negative values to zeros
     for i in range(len(predictions)):
@@ -179,9 +183,10 @@ def forecast_prophet(stock_code,ts, df_t, scale=0.05):
             predictions.iloc[i,1] = 0
     
     # create dataframe for predictions
-    pred_lines = pd.DataFrame(columns=['id','unidades_vendidas'])
+    pred_lines = pd.DataFrame(columns=['fecha','id','unidades_vendidas'])
     pred_lines['unidades_vendidas']=predictions['yhat']
-    pred_lines['id']=stock_code    
+    pred_lines['fecha']=predictions['ds']
+    pred_lines['id']=stock_code          
     
     return (pred_lines)
 
@@ -192,7 +197,7 @@ results_prophet = {}
 
 for each in codes_test:
 
-    ts = get_ts(each)[0]
+    ts = prep_data(each)[0]
 
     mae, coef = modeling_prophet(ts, scale=0.05)
 
@@ -224,11 +229,11 @@ prophet_res.to_csv('prophet_results.csv', index=False)
 #### FORECASTING WITH PROPHET FOR TEST PERIOD
 
 # Set dictionary for keeping forecasts
-pred_prophet = pd.DataFrame(columns=['id', 'unidades_vendidas'])
+pred_prophet = pd.DataFrame()
 
 for each in codes_test:
 
-    ts, df_t = get_ts(each)
+    ts, df_t = prep_data(each)
 
     pred_lines = forecast_prophet(each, ts, df_t, scale=0.05)
 
@@ -236,7 +241,8 @@ for each in codes_test:
     pred_prophet= pd.concat([pred_prophet, pred_lines])
 
     # print progress line
-    print('Item number: '+str(len(pred_prophet)) + ', Item code: '+ str(each))
+    print('Item number: '+str(np.where(codes_test==each)[0][0]+1) + ', Item code: '+ str(each))
+
 
 # save forecast to file
 pred_prophet.to_csv('prophet_pred.csv', index=False)
